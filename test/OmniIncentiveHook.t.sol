@@ -11,7 +11,7 @@ import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "v4-core/src/types/Currency.sol";
 import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
-import {Counter} from "../src/Counter.sol";
+import {OmniIncentiveHook} from "../src/OmniIncentiveHook.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {PositionConfig} from "v4-periphery/src/libraries/PositionConfig.sol";
 
@@ -19,13 +19,13 @@ import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol
 import {EasyPosm} from "./utils/EasyPosm.sol";
 import {Fixtures} from "./utils/Fixtures.sol";
 
-contract CounterTest is Test, Fixtures {
+contract OmniIncentiveHookTest is Test, Fixtures {
     using EasyPosm for IPositionManager;
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
 
-    Counter hook;
+    OmniIncentiveHook hook;
     PoolId poolId;
 
     uint256 tokenId;
@@ -41,13 +41,19 @@ contract CounterTest is Test, Fixtures {
         // Deploy the hook to an address with the correct flags
         address flags = address(
             uint160(
-                Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
-                    | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
+                Hooks.BEFORE_SWAP_FLAG |
+                    Hooks.AFTER_SWAP_FLAG |
+                    Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
+                    Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
             ) ^ (0x4444 << 144) // Namespace the hook to avoid collisions
         );
         bytes memory constructorArgs = abi.encode(manager); //Add all the necessary constructor arguments from the hook
-        deployCodeTo("Counter.sol:Counter", constructorArgs, flags);
-        hook = Counter(flags);
+        deployCodeTo(
+            "OmniIncentiveHook.sol:OmniIncentiveHook",
+            constructorArgs,
+            flags
+        );
+        hook = OmniIncentiveHook(flags);
 
         // Create the pool
         key = PoolKey(currency0, currency1, 3000, 60, IHooks(hook));
@@ -60,7 +66,7 @@ contract CounterTest is Test, Fixtures {
             tickLower: TickMath.minUsableTick(key.tickSpacing),
             tickUpper: TickMath.maxUsableTick(key.tickSpacing)
         });
-        (tokenId,) = posm.mint(
+        (tokenId, ) = posm.mint(
             config,
             10_000e18,
             MAX_SLIPPAGE_ADD_LIQUIDITY,
@@ -71,7 +77,7 @@ contract CounterTest is Test, Fixtures {
         );
     }
 
-    function testCounterHooks() public {
+    function testOmniIncentiveHooks() public {
         // positions were created in setup()
         assertEq(hook.beforeAddLiquidityCount(poolId), 1);
         assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);
@@ -82,7 +88,12 @@ contract CounterTest is Test, Fixtures {
         // Perform a test swap //
         bool zeroForOne = true;
         int256 amountSpecified = -1e18; // negative number indicates exact input swap!
-        BalanceDelta swapDelta = swap(key, zeroForOne, amountSpecified, ZERO_BYTES);
+        BalanceDelta swapDelta = swap(
+            key,
+            zeroForOne,
+            amountSpecified,
+            ZERO_BYTES
+        );
         // ------------------- //
 
         assertEq(int256(swapDelta.amount0()), amountSpecified);

@@ -14,13 +14,14 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {Constants} from "v4-core/src/../test/utils/Constants.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {CurrencyLibrary, Currency} from "v4-core/src/types/Currency.sol";
-import {Counter} from "../src/Counter.sol";
+import {OmniIncentiveHook} from "../src/OmniIncentiveHook.sol";
 import {HookMiner} from "../test/utils/HookMiner.sol";
 
 /// @notice Forge script for deploying v4 & hooks to **anvil**
 /// @dev This script only works on an anvil RPC because v4 exceeds bytecode limits
-contract CounterScript is Script {
-    address constant CREATE2_DEPLOYER = address(0x4e59b44847b379578588920cA78FbF26c0B4956C);
+contract OmniIncentiveHookScript is Script {
+    address constant CREATE2_DEPLOYER =
+        address(0x4e59b44847b379578588920cA78FbF26c0B4956C);
 
     function setUp() public {}
 
@@ -30,29 +31,49 @@ contract CounterScript is Script {
 
         // hook contracts must have specific flags encoded in the address
         uint160 permissions = uint160(
-            Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
-                | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
+            Hooks.BEFORE_SWAP_FLAG |
+                Hooks.AFTER_SWAP_FLAG |
+                Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
+                Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
         );
 
         // Mine a salt that will produce a hook address with the correct permissions
-        (address hookAddress, bytes32 salt) =
-            HookMiner.find(CREATE2_DEPLOYER, permissions, type(Counter).creationCode, abi.encode(address(manager)));
+        (address hookAddress, bytes32 salt) = HookMiner.find(
+            CREATE2_DEPLOYER,
+            permissions,
+            type(OmniIncentiveHook).creationCode,
+            abi.encode(address(manager))
+        );
 
         // ----------------------------- //
         // Deploy the hook using CREATE2 //
         // ----------------------------- //
         vm.broadcast();
-        Counter counter = new Counter{salt: salt}(manager);
-        require(address(counter) == hookAddress, "CounterScript: hook address mismatch");
+        OmniIncentiveHook omniIncentiveHook = new OmniIncentiveHook{salt: salt}(
+            manager
+        );
+        require(
+            address(omniIncentiveHook) == hookAddress,
+            "OmniIncentiveHookScript: hook address mismatch"
+        );
 
         // Additional helpers for interacting with the pool
         vm.startBroadcast();
-        (PoolModifyLiquidityTest lpRouter, PoolSwapTest swapRouter,) = deployRouters(manager);
+        (
+            PoolModifyLiquidityTest lpRouter,
+            PoolSwapTest swapRouter,
+
+        ) = deployRouters(manager);
         vm.stopBroadcast();
 
         // test the lifecycle (create pool, add liquidity, swap)
         vm.startBroadcast();
-        testLifecycle(manager, address(counter), lpRouter, swapRouter);
+        testLifecycle(
+            manager,
+            address(omniIncentiveHook),
+            lpRouter,
+            swapRouter
+        );
         vm.stopBroadcast();
     }
 
@@ -63,16 +84,25 @@ contract CounterScript is Script {
         return IPoolManager(address(new PoolManager(500000)));
     }
 
-    function deployRouters(IPoolManager manager)
+    function deployRouters(
+        IPoolManager manager
+    )
         internal
-        returns (PoolModifyLiquidityTest lpRouter, PoolSwapTest swapRouter, PoolDonateTest donateRouter)
+        returns (
+            PoolModifyLiquidityTest lpRouter,
+            PoolSwapTest swapRouter,
+            PoolDonateTest donateRouter
+        )
     {
         lpRouter = new PoolModifyLiquidityTest(manager);
         swapRouter = new PoolSwapTest(manager);
         donateRouter = new PoolDonateTest(manager);
     }
 
-    function deployTokens() internal returns (MockERC20 token0, MockERC20 token1) {
+    function deployTokens()
+        internal
+        returns (MockERC20 token0, MockERC20 token1)
+    {
         MockERC20 tokenA = new MockERC20("MockA", "A", 18);
         MockERC20 tokenB = new MockERC20("MockB", "B", 18);
         if (uint160(address(tokenA)) < uint160(address(tokenB))) {
@@ -98,8 +128,13 @@ contract CounterScript is Script {
 
         // initialize the pool
         int24 tickSpacing = 60;
-        PoolKey memory poolKey =
-            PoolKey(Currency.wrap(address(token0)), Currency.wrap(address(token1)), 3000, tickSpacing, IHooks(hook));
+        PoolKey memory poolKey = PoolKey(
+            Currency.wrap(address(token0)),
+            Currency.wrap(address(token1)),
+            3000,
+            tickSpacing,
+            IHooks(hook)
+        );
         manager.initialize(poolKey, Constants.SQRT_PRICE_1_1, ZERO_BYTES);
 
         // approve the tokens to the routers
@@ -112,7 +147,10 @@ contract CounterScript is Script {
         lpRouter.modifyLiquidity(
             poolKey,
             IPoolManager.ModifyLiquidityParams(
-                TickMath.minUsableTick(tickSpacing), TickMath.maxUsableTick(tickSpacing), 100 ether, 0
+                TickMath.minUsableTick(tickSpacing),
+                TickMath.maxUsableTick(tickSpacing),
+                100 ether,
+                0
             ),
             ZERO_BYTES
         );
@@ -123,10 +161,12 @@ contract CounterScript is Script {
         IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
             zeroForOne: zeroForOne,
             amountSpecified: amountSpecified,
-            sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1 // unlimited impact
+            sqrtPriceLimitX96: zeroForOne
+                ? TickMath.MIN_SQRT_PRICE + 1
+                : TickMath.MAX_SQRT_PRICE - 1 // unlimited impact
         });
-        PoolSwapTest.TestSettings memory testSettings =
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        PoolSwapTest.TestSettings memory testSettings = PoolSwapTest
+            .TestSettings({takeClaims: false, settleUsingBurn: false});
         swapRouter.swap(poolKey, params, testSettings, ZERO_BYTES);
     }
 }
