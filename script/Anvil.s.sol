@@ -50,7 +50,9 @@ contract OmniIncentiveHookScript is Script {
         // ----------------------------- //
         vm.broadcast();
         OmniIncentiveHook omniIncentiveHook = new OmniIncentiveHook{salt: salt}(
-            manager
+            manager,
+            "OmniIncentiveHook",
+            "OIH"
         );
         require(
             address(omniIncentiveHook) == hookAddress,

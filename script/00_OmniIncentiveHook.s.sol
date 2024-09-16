@@ -39,7 +39,9 @@ contract OmniIncentiveHookScript is Script {
         // Deploy the hook using CREATE2
         vm.broadcast();
         OmniIncentiveHook omniIncentiveHook = new OmniIncentiveHook{salt: salt}(
-            IPoolManager(address(GOERLI_POOLMANAGER))
+            IPoolManager(address(GOERLI_POOLMANAGER)),
+            "OmniIncentiveHook",
+            "OIH"
         );
         require(
             address(omniIncentiveHook) == hookAddress,

@@ -18,6 +18,7 @@ import {PositionConfig} from "v4-periphery/src/libraries/PositionConfig.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {EasyPosm} from "./utils/EasyPosm.sol";
 import {Fixtures} from "./utils/Fixtures.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract OmniIncentiveHookTest is Test, Fixtures {
     using EasyPosm for IPositionManager;
@@ -40,14 +41,14 @@ contract OmniIncentiveHookTest is Test, Fixtures {
 
         // Deploy the hook to an address with the correct flags
         address flags = address(
-            uint160(
-                Hooks.BEFORE_SWAP_FLAG |
-                    Hooks.AFTER_SWAP_FLAG |
-                    Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-                    Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
-            ) ^ (0x4444 << 144) // Namespace the hook to avoid collisions
+            uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG) ^
+                (0x4444 << 144) // Namespace the hook to avoid collisions
         );
-        bytes memory constructorArgs = abi.encode(manager); //Add all the necessary constructor arguments from the hook
+        bytes memory constructorArgs = abi.encode(
+            manager,
+            "OmniIncentiveHook",
+            "OIH"
+        ); //Add all the necessary constructor arguments from the hook
         deployCodeTo(
             "OmniIncentiveHook.sol:OmniIncentiveHook",
             constructorArgs,
@@ -73,54 +74,142 @@ contract OmniIncentiveHookTest is Test, Fixtures {
             MAX_SLIPPAGE_ADD_LIQUIDITY,
             address(this),
             block.timestamp,
-            ZERO_BYTES
+            getHookData(msg.sender)
         );
     }
 
-    function testOmniIncentiveHooks() public {
+    function testSwapHooks() public {
         // positions were created in setup()
-        assertEq(hook.beforeAddLiquidityCount(poolId), 1);
-        assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);
 
-        assertEq(hook.beforeSwapCount(poolId), 0);
-        assertEq(hook.afterSwapCount(poolId), 0);
+        // Preparing hook data
+        bytes memory hookData = getHookData(msg.sender);
 
-        // Perform a test swap //
+        OmniIncentiveHook.Bond memory bond = OmniIncentiveHook.Bond({
+            bondMarketOwner: address(0),
+            rewardToken: IERC20(Currency.unwrap(key.currency1)),
+            isRewardTokenCurrency0: false,
+            rewardTokensToDistribute: 1000 ether,
+            rewardPercentage: 500, // 5%
+            campaignStartTime: 0,
+            campaignEndTime: 3 days,
+            campaignCliffTime: 2 days,
+            campaignVestingDuration: 6 days,
+            rewardTokensDistributed: 0
+        });
+
+        bond.rewardToken.approve(address(hook), type(uint256).max);
+
+        // Creating Campaign
+        hook.createCampaign(key, OmniIncentiveHook.BondType.Swap, bond);
+
+        // Perform a test swap
         bool zeroForOne = true;
-        int256 amountSpecified = -1e18; // negative number indicates exact input swap!
+        int256 amountSpecified = 12e18;
         BalanceDelta swapDelta = swap(
             key,
             zeroForOne,
             amountSpecified,
-            ZERO_BYTES
+            hookData
         );
-        // ------------------- //
 
-        assertEq(int256(swapDelta.amount0()), amountSpecified);
+        // Correct swap amount assertion
+        assertEq(int256(swapDelta.amount1()), amountSpecified);
 
-        assertEq(hook.beforeSwapCount(poolId), 1);
-        assertEq(hook.afterSwapCount(poolId), 1);
+        // ERC-5725 mint assertion
+        assertEq(hook.balanceOf(msg.sender), 1);
+
+        // Rewards payout assertions at different times
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 0);
+
+        vm.warp(block.timestamp + 1 days);
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 0);
+
+        vm.warp(block.timestamp + 1 days);
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 2e17);
+
+        vm.warp(block.timestamp + 2 days);
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 4e17);
+
+        vm.warp(block.timestamp + 2 days);
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 6e17);
+
+        // Claiming rewards
+
+        uint256 beforeBalance = bond.rewardToken.balanceOf(msg.sender);
+        vm.prank(msg.sender);
+        hook.claim(0);
+        assertEq(
+            beforeBalance + hook.vestedPayoutAtTime(0, block.timestamp),
+            bond.rewardToken.balanceOf(msg.sender)
+        );
     }
 
     function testLiquidityHooks() public {
         // positions were created in setup()
-        assertEq(hook.beforeAddLiquidityCount(poolId), 1);
-        assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);
 
-        // remove liquidity
-        uint256 liquidityToRemove = 1e18;
-        posm.decreaseLiquidity(
+        OmniIncentiveHook.Bond memory bond = OmniIncentiveHook.Bond({
+            bondMarketOwner: address(0),
+            rewardToken: IERC20(Currency.unwrap(key.currency1)),
+            isRewardTokenCurrency0: false,
+            rewardTokensToDistribute: 1000 ether,
+            rewardPercentage: 500, // 5%
+            campaignStartTime: 0,
+            campaignEndTime: 3 days,
+            campaignCliffTime: 2 days,
+            campaignVestingDuration: 6 days,
+            rewardTokensDistributed: 0
+        });
+
+        bond.rewardToken.approve(address(hook), type(uint256).max);
+
+        // Creating Campaign
+        hook.createCampaign(key, OmniIncentiveHook.BondType.Liquidity, bond);
+
+        uint256 liquidityToAdd = 12e18;
+
+        BalanceDelta liqudiityDelta = posm.increaseLiquidity(
             tokenId,
             config,
-            liquidityToRemove,
-            MAX_SLIPPAGE_REMOVE_LIQUIDITY,
-            MAX_SLIPPAGE_REMOVE_LIQUIDITY,
-            address(this),
+            liquidityToAdd,
+            MAX_SLIPPAGE_ADD_LIQUIDITY,
+            MAX_SLIPPAGE_ADD_LIQUIDITY,
             block.timestamp,
-            ZERO_BYTES
+            getHookData(msg.sender)
         );
 
-        assertEq(hook.beforeAddLiquidityCount(poolId), 1);
-        assertEq(hook.beforeRemoveLiquidityCount(poolId), 1);
+        // Liquidity deposited assertion
+        assertEq(uint256(int256(-liqudiityDelta.amount1())), 12e18);
+
+        // ERC-5725 mint assertion
+        assertEq(hook.balanceOf(msg.sender), 1);
+
+        // Rewards payout assertions at different times
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 0);
+
+        vm.warp(block.timestamp + 1 days);
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 0);
+
+        vm.warp(block.timestamp + 1 days);
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 2e17);
+
+        vm.warp(block.timestamp + 2 days);
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 4e17);
+
+        vm.warp(block.timestamp + 2 days);
+        assertEq(hook.vestedPayoutAtTime(0, block.timestamp), 6e17);
+
+        // Claiming rewards
+
+        uint256 beforeBalance = bond.rewardToken.balanceOf(msg.sender);
+        vm.prank(msg.sender);
+        hook.claim(0);
+        assertEq(
+            beforeBalance + hook.vestedPayoutAtTime(0, block.timestamp),
+            bond.rewardToken.balanceOf(msg.sender)
+        );
+    }
+
+    function getHookData(address caller) public pure returns (bytes memory) {
+        return abi.encode(caller);
     }
 }
